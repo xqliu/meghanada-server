@@ -43,8 +43,8 @@ import meghanada.config.Config;
 import meghanada.formatter.JavaFormatter;
 import meghanada.store.ProjectDatabaseHelper;
 import meghanada.store.Storable;
-import meghanada.utils.ClassNameUtils;
 import meghanada.utils.FileUtils;
+import meghanada.utils.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.eclipse.jdt.core.JavaCore;
@@ -53,6 +53,7 @@ public abstract class Project implements Serializable, Storable {
 
   public static final String GRADLE_PROJECT_FILE = "build.gradle";
   public static final String MVN_PROJECT_FILE = "pom.xml";
+  public static final String ECLIPSE_PROJECT_FILE = ".project";
 
   // public static final String PROJECT_ROOT_KEY = "project.root";
 
@@ -78,6 +79,7 @@ public abstract class Project implements Serializable, Storable {
   private static final String EXCLUDE_FILE = "exclude-file";
   private static final String JAVA8_JAVAC_ARGS = "java8-javac-args";
   private static final String JAVA9_JAVAC_ARGS = "java9-javac-args";
+  private static final String JAVA10_JAVAC_ARGS = "java10-javac-args";
   private static final String FORMATTER_FILE = "meghanadaFormatter.properties";
   private static final String FORMATTER_FILE_XML = "meghanadaFormatter.xml";
   private static final Pattern SEP_COMPILE = Pattern.compile("/", Pattern.LITERAL);
@@ -611,12 +613,10 @@ public abstract class Project implements Serializable, Storable {
     cp += File.pathSeparator + jarPath;
     cmd.add("-ea");
     cmd.add("-XX:+TieredCompilation");
-    cmd.add("-XX:+UseConcMarkSweepGC");
     cmd.add("-XX:SoftRefLRUPolicyMSPerMB=50");
     cmd.add("-XX:ReservedCodeCacheSize=240m");
     cmd.add("-Dsun.io.useCanonCaches=false");
     cmd.add("-Xms128m");
-    cmd.add("-Xmx750m");
     if (debug) {
       cmd.add("-Xdebug");
       cmd.add(
@@ -797,6 +797,10 @@ public abstract class Project implements Serializable, Storable {
         final List<String> list = config.getStringList(JAVA9_JAVAC_ARGS);
         mainConfig.setJava9JavacArgs(list);
       }
+      if (config.hasPath(JAVA10_JAVAC_ARGS) && mainConfig.isJava10()) {
+        final List<String> list = config.getStringList(JAVA10_JAVAC_ARGS);
+        mainConfig.setJava10JavacArgs(list);
+      }
     }
 
     // guard
@@ -853,7 +857,7 @@ public abstract class Project implements Serializable, Storable {
                   final String path = file.getCanonicalPath();
                   if (path.startsWith(rootPath)) {
                     final String p = path.substring(rootPath.length() + 1, path.length() - 5);
-                    final String importClass = ClassNameUtils.replace(p, File.separator, ".");
+                    final String importClass = StringUtils.replace(p, File.separator, ".");
                     if (this.callerMap.containsKey(importClass)) {
                       final Set<String> imports = this.callerMap.get(importClass);
                       for (final String dep : imports) {
@@ -879,7 +883,7 @@ public abstract class Project implements Serializable, Storable {
   }
 
   public synchronized void writeCaller() throws IOException {
-    ProjectDatabaseHelper.saveCallerMap(this.projectRootPath, this.callerMap);
+    boolean b = ProjectDatabaseHelper.saveCallerMap(this.projectRootPath, this.callerMap);
   }
 
   private void loadCaller() throws IOException {
@@ -1145,7 +1149,10 @@ public abstract class Project implements Serializable, Storable {
       sb.append(String.format("home: %s\n", config.getHomeDir()));
       sb.append(String.format("userHome: %s\n", config.getUserHomeDir()));
       sb.append(String.format("useFastBoot: %s\n", config.useFastBoot()));
-      sb.append(String.format("useClassFuzzySearch: %s\n", config.useClassFuzzySearch()));
+      sb.append(
+          String.format(
+              "classCompletionMatcher: %s\n", config.classCompletionMatcher().toString()));
+      sb.append(String.format("completionMatcher: %s\n", config.completionMatcher().toString()));
       sb.append(
           String.format("useJavaVersion: %s\n", System.getProperty("java.specification.version")));
       sb.append(String.format("javacArg: %s\n", config.getJavacArg()));
@@ -1172,26 +1179,33 @@ public abstract class Project implements Serializable, Storable {
       sb.append(String.format("compileTarget: %s\n", compileTarget));
       if (config.isJava8()) {
         sb.append(String.format("javac8Args: %s\n", config.getJava8JavacArgs()));
-      } else {
+      } else if (config.isJava9()) {
         sb.append(String.format("javac9Args: %s\n", config.getJava9JavacArgs()));
+      } else if (config.isJava10()) {
+        sb.append(String.format("javac10Args: %s\n", config.getJava10JavacArgs()));
       }
-      List<String> cpList = Splitter.on(File.pathSeparator).splitToList(this.cachedClasspath);
-      if (cpList.size() > 0) {
-        sb.append("classpath:\n");
-        cpList.forEach(
-            s -> {
-              sb.append(String.format("  %s\n", s));
-            });
-        sb.append("\n");
+      if (nonNull(this.cachedClasspath)) {
+        List<String> cpList = Splitter.on(File.pathSeparator).splitToList(this.cachedClasspath);
+        if (cpList.size() > 0) {
+          sb.append("classpath:\n");
+          cpList.forEach(
+              s -> {
+                sb.append(String.format("  %s\n", s));
+              });
+          sb.append("\n");
+        }
       }
-      List<String> cpAllList = Splitter.on(File.pathSeparator).splitToList(this.cachedAllClasspath);
-      if (cpAllList.size() > 0) {
-        sb.append("allClasspath:\n");
-        cpAllList.forEach(
-            s -> {
-              sb.append(String.format("  %s\n", s));
-            });
-        sb.append("\n");
+      if (nonNull(this.cachedAllClasspath)) {
+        List<String> cpAllList =
+            Splitter.on(File.pathSeparator).splitToList(this.cachedAllClasspath);
+        if (cpAllList.size() > 0) {
+          sb.append("allClasspath:\n");
+          cpAllList.forEach(
+              s -> {
+                sb.append(String.format("  %s\n", s));
+              });
+          sb.append("\n");
+        }
       }
       Properties sysProp = System.getProperties();
       sb.append("SystemProperties:\n");

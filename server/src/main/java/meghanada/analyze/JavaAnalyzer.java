@@ -77,15 +77,10 @@ public class JavaAnalyzer {
                 }));
   }
 
-  public EventBus getEventBus() {
-    return this.eventBus;
-  }
-
   private static Set<File> getErrorFiles(
       final List<Diagnostic<? extends JavaFileObject>> diagnostics) {
 
-    final Set<File> temp =
-        Collections.newSetFromMap(new ConcurrentHashMap<File, Boolean>(diagnostics.size()));
+    final Set<File> temp = Collections.newSetFromMap(new ConcurrentHashMap<>(diagnostics.size()));
 
     for (final Diagnostic<? extends JavaFileObject> diagnostic : diagnostics) {
       final Diagnostic.Kind kind = diagnostic.getKind();
@@ -101,6 +96,10 @@ public class JavaAnalyzer {
     }
 
     return temp;
+  }
+
+  public EventBus getEventBus() {
+    return this.eventBus;
   }
 
   public CompileResult analyzeAndCompile(final List<File> files, final String classpath, String out)
@@ -172,6 +171,8 @@ public class JavaAnalyzer {
         compileOptions.addAll(config.getJava8JavacArgs());
       } else if (this.compileTarget.equals("1.9") || this.compileTarget.equals("9")) {
         compileOptions.addAll(config.getJava9JavacArgs());
+      } else if (this.compileTarget.equals("1.10") || this.compileTarget.equals("10")) {
+        compileOptions.addAll(config.getJava10JavacArgs());
       }
       compileOptions.addAll(opts);
       final JavaCompiler.CompilationTask compilerTask =
@@ -197,9 +198,8 @@ public class JavaAnalyzer {
       this.eventBus.post(new AnalyzedEvent(analyzedMap, isDiagnostics));
 
       final boolean success = errorFiles.size() == 0;
-      final CompileResult result = new CompileResult(success, analyzedMap, diagnostics, errorFiles);
       // ProjectDatabaseHelper.saveCompileResult(result);
-      return result;
+      return new CompileResult(success, analyzedMap, diagnostics, errorFiles);
     }
   }
 
@@ -220,7 +220,7 @@ public class JavaAnalyzer {
       final File sourceFile = new File(sourcePath);
       final JavaFileObject fileObject =
           new JavaSourceFromString(sourceFile.getCanonicalPath(), sourceCode);
-      final List<? extends JavaFileObject> compilationUnits = Arrays.asList(fileObject);
+      final List<? extends JavaFileObject> compilationUnits = Collections.singletonList(fileObject);
       final DiagnosticCollector<JavaFileObject> diagnosticCollector = new DiagnosticCollector<>();
       final List<String> opts =
           Arrays.asList(
@@ -241,6 +241,8 @@ public class JavaAnalyzer {
         compileOptions.addAll(config.getJava8JavacArgs());
       } else if (this.compileTarget.equals("1.9") || this.compileTarget.equals("9")) {
         compileOptions.addAll(config.getJava9JavacArgs());
+      } else if (this.compileTarget.equals("1.10") || this.compileTarget.equals("10")) {
+        compileOptions.addAll(config.getJava10JavacArgs());
       }
       compileOptions.addAll(opts);
 
@@ -258,12 +260,12 @@ public class JavaAnalyzer {
 
       final Set<File> errorFiles = JavaAnalyzer.getErrorFiles(diagnostics);
 
+      final Map<File, Source> analyzedMap = analyze(parsedIter, errorFiles);
       Future<?> future =
           this.getExecutorService()
               .submit(
                   () -> {
                     try {
-                      final Map<File, Source> analyzedMap = analyze(parsedIter, errorFiles);
                       if (generate && !Config.load().useExternalBuilder()) {
                         javacTask.generate();
                         CachedASMReflector.getInstance().updateClassIndexFromDirectory();
@@ -274,7 +276,7 @@ public class JavaAnalyzer {
                     }
                   });
       final boolean success = errorFiles.size() == 0;
-      return new CompileResult(success, new HashMap<>(0), diagnostics, errorFiles);
+      return new CompileResult(success, analyzedMap, diagnostics, errorFiles);
     }
   }
 
@@ -298,7 +300,7 @@ public class JavaAnalyzer {
   }
 
   private static class JavaSourceFromString extends SimpleJavaFileObject {
-    String code;
+    final String code;
 
     JavaSourceFromString(String filePath, String code) {
       super(new File(filePath).toURI(), Kind.SOURCE);

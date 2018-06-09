@@ -37,7 +37,7 @@ public class FileWatchEventSubscriber extends AbstractSubscriber {
       GlobalCache globalCache = GlobalCache.getInstance();
       Project project = sessionEventBus.getSession().getCurrentProject();
       globalCache.invalidateSource(project, file);
-      ProjectDatabaseHelper.deleteSource(filePath);
+      boolean b = ProjectDatabaseHelper.deleteSource(filePath);
       FileUtils.getClassFile(filePath, project.getSources(), project.getOutput())
           .ifPresent(File::delete);
       FileUtils.getClassFile(filePath, project.getTestSources(), project.getTestOutput())
@@ -55,6 +55,7 @@ public class FileWatchEventSubscriber extends AbstractSubscriber {
     final String name = file.getName();
     if (name.endsWith(Project.GRADLE_PROJECT_FILE)
         || name.endsWith(Project.MVN_PROJECT_FILE)
+        || name.endsWith(Project.ECLIPSE_PROJECT_FILE)
         || name.endsWith(Config.MEGHANADA_CONF_FILE)) {
       // project reload
       try {

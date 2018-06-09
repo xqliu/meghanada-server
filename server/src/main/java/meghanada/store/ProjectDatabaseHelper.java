@@ -39,9 +39,8 @@ public class ProjectDatabaseHelper {
   private static final String BLOB_PROP_MEMBERS = "members";
   private static final String BLOB_PROP_CHECKSUM = "checksum";
   private static final String BLOB_PROP_CALLER = "caller";
-  private static int indexTTL = 60 * 60;
-
   private static final Logger log = LogManager.getLogger(ProjectDatabaseHelper.class);
+  private static int indexTTL = 60 * 60;
 
   public static void saveClassIndexes(Collection<ClassIndex> indexes, boolean allowUpdate) {
     ProjectDatabase projectDatabase = ProjectDatabase.getInstance();
@@ -61,16 +60,17 @@ public class ProjectDatabaseHelper {
 
   public static void saveLoadJar(String filePath) {
     ProjectDatabase database = ProjectDatabase.getInstance();
-    database.execute(
-        txn -> {
-          EntityIterable it = txn.find(ClassIndex.FILE_ENTITY_TYPE, "filePath", filePath);
-          if (nonNull(it.getFirst())) {
-            return false;
-          }
-          Entity entity = txn.newEntity(ClassIndex.FILE_ENTITY_TYPE);
-          entity.setProperty("filePath", filePath);
-          return true;
-        });
+    boolean b =
+        database.execute(
+            txn -> {
+              EntityIterable it = txn.find(ClassIndex.FILE_ENTITY_TYPE, "filePath", filePath);
+              if (nonNull(it.getFirst())) {
+                return false;
+              }
+              Entity entity = txn.newEntity(ClassIndex.FILE_ENTITY_TYPE);
+              entity.setProperty("filePath", filePath);
+              return true;
+            });
   }
 
   public static List<ClassIndex> getClassIndexes(String filePath) {
@@ -201,7 +201,7 @@ public class ProjectDatabaseHelper {
       database.asyncStoreObject(project, true);
       return;
     }
-    database.storeObject(project, true);
+    long l = database.storeObject(project, true);
   }
 
   public static Project loadProject(String projectRoot) throws Exception {
@@ -220,7 +220,7 @@ public class ProjectDatabaseHelper {
       database.asyncStoreObjects(sources, true);
       return;
     }
-    database.storeObjects(sources, true);
+    long l = database.storeObjects(sources, true);
   }
 
   public static List<Source> getAllSources() {

@@ -183,8 +183,7 @@ public class TreeAnalyzer {
   }
 
   private static void analyzeLiteral(
-      SourceContext context, JCTree.JCLiteral literal, int preferredPos, int endPos)
-      throws IOException {
+      SourceContext context, JCTree.JCLiteral literal, int preferredPos, int endPos) {
     Source src = context.getSource();
     Tree.Kind kind = literal.getKind();
     Object value = literal.getValue();
@@ -251,15 +250,11 @@ public class TreeAnalyzer {
       if (markUnUse) {
         // contains
         String name = ClassNameUtils.replaceInnerMark(simpleName);
-        if (src.unused.contains(name)) {
-          src.unused.remove(name);
-        }
+        src.unused.remove(name);
         int i = simpleName.indexOf('$');
         if (i > 0) {
           String parentClass = simpleName.substring(0, i);
-          if (src.unused.contains(parentClass)) {
-            src.unused.remove(parentClass);
-          }
+          src.unused.remove(parentClass);
         }
       }
 
@@ -477,7 +472,7 @@ public class TreeAnalyzer {
     } else {
       try (Stream<? extends CompilationUnitTree> stream =
           StreamSupport.stream(parsed.spliterator(), true)) {
-        // parallel
+        // parallel ?
         stream.forEach(cut -> tryAnalyzeUnit(errorFiles, analyzeMap, cut));
       }
     }
@@ -832,7 +827,7 @@ public class TreeAnalyzer {
               .ifPresent(
                   scope -> {
                     scope.addMethodCall(methodCall);
-                    addMethodCallIndex(src, methodCall);
+                    addUsageIndex(src, methodCall);
                   });
         }
       }
@@ -959,7 +954,7 @@ public class TreeAnalyzer {
     JCTree.JCExpression nameExpression = vd.getNameExpression();
     JCTree typeTree = vd.getType();
     JCTree.JCModifiers modifiers = vd.getModifiers();
-
+    String fieldModfier = modifiers.toString();
     parseModifiers(context, modifiers);
 
     if (nonNull(initializer) || nonNull(nameExpression)) {
@@ -975,11 +970,14 @@ public class TreeAnalyzer {
             Range range = Range.create(src, preferredPos, endPos);
             Range nameRange = Range.create(src, preferredPos, preferredPos + vName.length());
 
-            ExpressionScope expressionScope = new ExpressionScope(preferredPos, range);
+            ExpressionScope expr = new ExpressionScope(preferredPos, range);
             if (bs instanceof ClassScope) {
-              expressionScope.isField = true;
+              ClassScope cs = (ClassScope) bs;
+              expr.isField = true;
+              expr.modifier = fieldModfier;
+              expr.declaringClass = cs.getFQCN();
             }
-            bs.startExpression(expressionScope);
+            bs.startExpression(expr);
 
             if (typeTree instanceof JCTree.JCTypeUnion) {
 
@@ -1061,12 +1059,13 @@ public class TreeAnalyzer {
   }
 
   private static void analyzeMethodDecl(
-      SourceContext context, JCTree.JCMethodDecl md, int preferredPos, int endPos)
+      SourceContext context, final JCTree.JCMethodDecl md, int preferredPos, int endPos)
       throws IOException {
 
     Source src = context.getSource();
     String name = md.getName().toString();
     JCTree.JCModifiers modifiers = md.getModifiers();
+    final String methodModifier = modifiers.toString();
     parseModifiers(context, modifiers);
     Range nameRange = Range.create(src, preferredPos, preferredPos + name.length());
     Range range = Range.create(src, preferredPos, endPos);
@@ -1078,7 +1077,7 @@ public class TreeAnalyzer {
                 String methodName = name;
                 boolean isConstructor = false;
                 String returnFQCN = "";
-
+                final String declaringClass = classScope.getFQCN();
                 if (!name.equals("<init>")) {
                   // set return type
                   JCTree returnTypeExpr = md.getReturnType();
@@ -1099,10 +1098,10 @@ public class TreeAnalyzer {
                     returnFQCN = methodName;
                   }
                 }
-
                 MethodScope scope =
                     classScope.startMethod(
-                        methodName, nameRange, preferredPos, range, isConstructor);
+                        declaringClass, methodName, nameRange, preferredPos, range, isConstructor);
+                scope.modifier = methodModifier.trim();
                 scope.returnType = TreeAnalyzer.markFQCN(src, returnFQCN);
 
                 // check method parameter
@@ -1124,6 +1123,7 @@ public class TreeAnalyzer {
                   for (JCTree.JCExpression expr : throwsList) {
                     String ex = resolveTypeFromImport(src, expr);
                     String fqcn = TreeAnalyzer.markFQCN(src, ex);
+                    scope.addException(fqcn);
                   }
                 }
 
@@ -1316,20 +1316,7 @@ public class TreeAnalyzer {
             .ifPresent(
                 fqcn -> {
                   fa.declaringClass = TreeAnalyzer.markFQCN(src, fqcn);
-                  if (selected instanceof JCTree.JCIdent) {
-                    JCTree.JCIdent ident = (JCTree.JCIdent) selected;
-                    int vStart = ident.getStartPosition();
-                    int vEnd = ident.getEndPosition(context.getEndPosTable());
-                    Range vRange = Range.create(src, vStart, vEnd);
-                    Variable variable = new Variable(selectScope, ident.pos, vRange);
-                    variable.fqcn = fqcn;
-                    src.getCurrentScope()
-                        .ifPresent(
-                            scope -> {
-                              scope.addVariable(variable);
-                              addSymbolIndex(src, scope, variable);
-                            });
-                  }
+                  addVariable(context, src, selected, selectScope, fqcn);
                 });
       }
       if (nonNull(sym.type)) {
@@ -1339,7 +1326,7 @@ public class TreeAnalyzer {
           .ifPresent(
               scope -> {
                 scope.addFieldAccess(fa);
-                addFieldAccessIndex(src, fa);
+                addUsageIndex(src, fa);
               });
 
     } else if (kind.equals(ElementKind.METHOD)) {
@@ -1358,7 +1345,7 @@ public class TreeAnalyzer {
           .ifPresent(
               scope -> {
                 scope.addMethodCall(methodCall);
-                addMethodCallIndex(src, methodCall);
+                addUsageIndex(src, methodCall);
               });
 
     } else if (kind.equals(ElementKind.ENUM)) {
@@ -1388,7 +1375,7 @@ public class TreeAnalyzer {
           .ifPresent(
               scope -> {
                 scope.addFieldAccess(fa);
-                addFieldAccessIndex(src, fa);
+                addUsageIndex(src, fa);
               });
 
     } else if (kind.equals(ElementKind.PACKAGE)) {
@@ -1422,6 +1409,28 @@ public class TreeAnalyzer {
     }
   }
 
+  private static void addVariable(
+      SourceContext context,
+      Source src,
+      JCTree.JCExpression selected,
+      String selectScope,
+      String fqcn) {
+    if (selected instanceof JCTree.JCIdent) {
+      JCTree.JCIdent ident = (JCTree.JCIdent) selected;
+      int vStart = ident.getStartPosition();
+      int vEnd = ident.getEndPosition(context.getEndPosTable());
+      Range vRange = Range.create(src, vStart, vEnd);
+      Variable variable = new Variable(selectScope, ident.pos, vRange);
+      variable.fqcn = fqcn;
+      src.getCurrentScope()
+          .ifPresent(
+              scope -> {
+                scope.addVariable(variable);
+                addSymbolIndex(src, scope, variable);
+              });
+    }
+  }
+
   private static void setReturnTypeAndArgType(
       SourceContext context, Source src, Type type, AccessSymbol as) {
 
@@ -1435,25 +1444,23 @@ public class TreeAnalyzer {
   }
 
   private static void analyzeExpressionStatement(
-      SourceContext context, JCTree.JCExpressionStatement expr, int preferredPos, int endPos) {
+      SourceContext context, JCTree.JCExpressionStatement exprStmt, int preferredPos, int endPos) {
 
     Source src = context.getSource();
-    JCTree.JCExpression expression = expr.getExpression();
+    JCTree.JCExpression expression = exprStmt.getExpression();
     Tree.Kind expressionKind = expression.getKind();
     JCTree expressionTree = expression.getTree();
-
     src.getCurrentBlock()
         .ifPresent(
             bs -> {
               try {
                 Range range = Range.create(src, preferredPos, endPos);
-
-                ExpressionScope expressionScope = new ExpressionScope(preferredPos, range);
+                ExpressionScope expr = new ExpressionScope(preferredPos, range);
                 if (bs instanceof ClassScope) {
-                  expressionScope.isField = true;
+                  expr.isField = true;
                 }
 
-                bs.startExpression(expressionScope);
+                bs.startExpression(expr);
                 if (expressionKind.equals(Tree.Kind.ASSIGNMENT)) {
 
                   JCTree.JCAssign assign = (JCTree.JCAssign) expressionTree;
@@ -1552,8 +1559,7 @@ public class TreeAnalyzer {
   }
 
   private static void analyzeIdent(
-      SourceContext context, JCTree.JCIdent ident, int preferredPos, int endPos)
-      throws IOException {
+      SourceContext context, JCTree.JCIdent ident, int preferredPos, int endPos) {
     if (endPos == -1) {
       return;
     }
@@ -1580,7 +1586,7 @@ public class TreeAnalyzer {
                       .ifPresent(
                           scope -> {
                             scope.addFieldAccess(fa);
-                            addFieldAccessIndex(src, fa);
+                            addUsageIndex(src, fa);
                           });
                 });
 
@@ -1624,15 +1630,17 @@ public class TreeAnalyzer {
 
       String clazz = src.getImportedClassFQCN(nm, null);
       if (nonNull(clazz)) {
-        variable.fqcn = TreeAnalyzer.markFQCN(src, clazz);
-        variable.argumentIndex = context.getArgumentIndex();
-        context.setArgumentFQCN(variable.fqcn);
-        src.getCurrentScope()
-            .ifPresent(
-                scope -> {
-                  scope.addVariable(variable);
-                  addSymbolIndex(src, scope, variable);
-                });
+        {
+          variable.fqcn = TreeAnalyzer.markFQCN(src, clazz);
+          variable.argumentIndex = context.getArgumentIndex();
+          context.setArgumentFQCN(variable.fqcn);
+          src.getCurrentScope()
+              .ifPresent(
+                  scope -> {
+                    scope.addVariable(variable);
+                    addSymbolIndex(src, scope, variable);
+                  });
+        }
         return;
       }
 
@@ -1656,6 +1664,7 @@ public class TreeAnalyzer {
 
       // mark unknown
       String unknown = TreeAnalyzer.markFQCN(src, nm);
+      log.trace("unknwon: {}", unknown);
     }
   }
 
@@ -1799,7 +1808,7 @@ public class TreeAnalyzer {
                 methodCall.setArguments(arguments);
               }
               scope.addMethodCall(methodCall);
-              addMethodCallIndex(src, methodCall);
+              addUsageIndex(src, methodCall);
             });
   }
 
@@ -1873,7 +1882,7 @@ public class TreeAnalyzer {
                     scope -> {
                       mc.setArguments(arguments);
                       scope.addMethodCall(mc);
-                      addMethodCallIndex(src, mc);
+                      addUsageIndex(src, mc);
                     });
           }
 
@@ -1899,7 +1908,7 @@ public class TreeAnalyzer {
                   scope -> {
                     mc.setArguments(arguments);
                     scope.addMethodCall(mc);
-                    addMethodCallIndex(src, mc);
+                    addUsageIndex(src, mc);
                   });
         }
       }
@@ -1948,20 +1957,7 @@ public class TreeAnalyzer {
                 fqcn -> {
                   methodCall.declaringClass = TreeAnalyzer.markFQCN(src, fqcn);
 
-                  if (expression instanceof JCTree.JCIdent) {
-                    JCTree.JCIdent ident = (JCTree.JCIdent) expression;
-                    int vStart = ident.getStartPosition();
-                    int vEndPos = ident.getEndPosition(context.getEndPosTable());
-                    Range vRange = Range.create(src, vStart, vEndPos);
-                    Variable variable = new Variable(selectScope, ident.pos, vRange);
-                    variable.fqcn = fqcn;
-                    src.getCurrentScope()
-                        .ifPresent(
-                            scope -> {
-                              scope.addVariable(variable);
-                              addSymbolIndex(src, scope, variable);
-                            });
-                  }
+                  addVariable(context, src, expression, selectScope, fqcn);
                 });
       }
 
@@ -2006,7 +2002,7 @@ public class TreeAnalyzer {
               scope -> {
                 methodCall.setArguments(arguments);
                 scope.addMethodCall(methodCall);
-                addMethodCallIndex(src, methodCall);
+                addUsageIndex(src, methodCall);
               });
 
     } else {
@@ -2098,20 +2094,11 @@ public class TreeAnalyzer {
     }
   }
 
-  private static void addFieldAccessIndex(final Source src, FieldAccess fa) {
-    long line = fa.range.begin.line;
-    long column = fa.range.begin.column;
-    String name = fa.name;
-    String declaringClass = fa.declaringClass;
-    src.addIndexWord(IndexableWord.Field.USAGE, line, column, name);
-    src.addIndexWord(IndexableWord.Field.DECLARING_CLASS, line, column, declaringClass);
-  }
-
-  private static void addMethodCallIndex(final Source src, MethodCall mc) {
-    long line = mc.range.begin.line;
-    long column = mc.range.begin.column;
-    String name = mc.name;
-    String declaringClass = mc.declaringClass;
+  private static void addUsageIndex(final Source src, AccessSymbol accessSymbol) {
+    long line = accessSymbol.range.begin.line;
+    long column = accessSymbol.range.begin.column;
+    String name = accessSymbol.name;
+    String declaringClass = accessSymbol.declaringClass;
     src.addIndexWord(IndexableWord.Field.USAGE, line, column, name);
     src.addIndexWord(IndexableWord.Field.DECLARING_CLASS, line, column, declaringClass);
   }

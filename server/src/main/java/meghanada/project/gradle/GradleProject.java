@@ -30,7 +30,6 @@ import meghanada.config.Config;
 import meghanada.project.Project;
 import meghanada.project.ProjectDependency;
 import meghanada.project.ProjectParseException;
-import meghanada.utils.ClassNameUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -60,9 +59,8 @@ public class GradleProject extends Project {
   private static final long serialVersionUID = 1L;
   private static final Logger log = LogManager.getLogger(GradleProject.class);
   private static String tempPath;
-
-  private File rootProject;
   transient Map<String, File> allModules;
+  private File rootProject;
   private transient List<String> prepareCompileTask;
   private transient List<String> prepareTestCompileTask;
   private transient ComparableVersion gradleVersion = null;
@@ -113,7 +111,7 @@ public class GradleProject extends Project {
   }
 
   private static String convertName(final String path) {
-    final String replaced = ClassNameUtils.replace(path, ":", "-");
+    final String replaced = meghanada.utils.StringUtils.replace(path, ":", "-");
     if (replaced.startsWith("-")) {
       return replaced.substring(1);
     }
@@ -122,6 +120,10 @@ public class GradleProject extends Project {
 
   public static String getTempPath() {
     return tempPath;
+  }
+
+  public static long getSerialVersionUID() {
+    return serialVersionUID;
   }
 
   @Override
@@ -550,6 +552,11 @@ public class GradleProject extends Project {
     return super.mergeFromProjectConfig();
   }
 
+  @Override
+  public String getProjectType() {
+    return "gradle";
+  }
+
   private static class VoidResultHandler implements ResultHandler<Void> {
     private final PipedOutputStream outputStream;
     private final PipedInputStream inputStream;
@@ -588,14 +595,5 @@ public class GradleProject extends Project {
         projectConnection.close();
       }
     }
-  }
-
-  public static long getSerialVersionUID() {
-    return serialVersionUID;
-  }
-
-  @Override
-  public String getProjectType() {
-    return "gradle";
   }
 }

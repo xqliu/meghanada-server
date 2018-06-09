@@ -31,29 +31,18 @@ import meghanada.store.Serializer;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.lucene.document.Document;
-import org.apache.lucene.queryParser.ParseException;
 
 public class IndexDatabase {
 
   private static final Logger log = LogManager.getLogger(IndexDatabase.class);
   private static final String QUOTE = "\"";
-
+  private static IndexDatabase indexDatabase;
+  private final ExecutorService executorService;
+  private final EventBus eventBus;
+  public int maxHits = Integer.MAX_VALUE;
   private DocumentSearcher searcher;
   private Environment environment = null;
   private File baseLocation = null;
-  private final ExecutorService executorService;
-  private final EventBus eventBus;
-
-  private static IndexDatabase indexDatabase;
-  public int maxHits = Integer.MAX_VALUE;
-
-  public static synchronized IndexDatabase getInstance() {
-    if (nonNull(indexDatabase)) {
-      return indexDatabase;
-    }
-    indexDatabase = new IndexDatabase();
-    return indexDatabase;
-  }
 
   private IndexDatabase() {
     this.executorService = Executors.newSingleThreadExecutor();
@@ -77,6 +66,28 @@ public class IndexDatabase {
                     log.catching(t);
                   }
                 }));
+  }
+
+  public static synchronized IndexDatabase getInstance() {
+    if (nonNull(indexDatabase)) {
+      return indexDatabase;
+    }
+    indexDatabase = new IndexDatabase();
+    return indexDatabase;
+  }
+
+  public static String doubleQuote(@Nullable final String s) {
+    if (isNull(s)) {
+      return QUOTE + QUOTE;
+    }
+    return QUOTE + s + QUOTE;
+  }
+
+  public static String paren(@Nullable final String s) {
+    if (isNull(s)) {
+      return s;
+    }
+    return "(" + s + ")";
   }
 
   public void shutdown() {
@@ -126,8 +137,8 @@ public class IndexDatabase {
             searcher.deleteDocuments(SearchIndexable.GROUP_ID, id);
             searcher.addDocuments(docs);
             log.debug("indexed :{} elapsed:{}", id, stopwatch.stop());
-          } catch (IOException ex) {
-            throw new UncheckedIOException(ex);
+          } catch (Throwable e) {
+            log.catching(e);
           }
         });
   }
@@ -146,8 +157,8 @@ public class IndexDatabase {
                 log.debug("indexed :{}", id);
               }
             }
-          } catch (IOException ex) {
-            throw new UncheckedIOException(ex);
+          } catch (Throwable e) {
+            log.catching(e);
           }
         });
   }
@@ -220,9 +231,7 @@ public class IndexDatabase {
                   });
             }
             return Optional.of(results);
-          } catch (IOException e) {
-            throw new UncheckedIOException(e);
-          } catch (ParseException e) {
+          } catch (Throwable e) {
             log.catching(e);
             return Optional.empty();
           }
@@ -262,27 +271,11 @@ public class IndexDatabase {
                   byte[] b = d.getBinaryValue("binary");
                   return Serializer.asObject(b, MemberDescriptor.class);
                 });
-          } catch (IOException e) {
-            throw new UncheckedIOException(e);
-          } catch (ParseException e) {
+          } catch (Throwable e) {
             log.catching(e);
             return Collections.emptyList();
           }
         });
-  }
-
-  public static String doubleQuote(@Nullable final String s) {
-    if (isNull(s)) {
-      return QUOTE + QUOTE;
-    }
-    return QUOTE + s + QUOTE;
-  }
-
-  public static String paren(@Nullable final String s) {
-    if (isNull(s)) {
-      return s;
-    }
-    return "(" + s + ")";
   }
 
   public static class IndexEvent {

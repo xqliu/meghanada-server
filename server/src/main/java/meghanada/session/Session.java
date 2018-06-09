@@ -38,6 +38,7 @@ import meghanada.analyze.CompileResult;
 import meghanada.analyze.Source;
 import meghanada.cache.GlobalCache;
 import meghanada.completion.JavaCompletion;
+import meghanada.completion.JavaImportCompletion;
 import meghanada.completion.JavaVariableCompletion;
 import meghanada.completion.LocalVariable;
 import meghanada.config.Config;
@@ -50,6 +51,7 @@ import meghanada.location.LocationSearcher;
 import meghanada.module.ModuleHelper;
 import meghanada.project.Project;
 import meghanada.project.ProjectDependency;
+import meghanada.project.eclipse.EclipseProject;
 import meghanada.project.gradle.GradleProject;
 import meghanada.project.maven.MavenProject;
 import meghanada.project.meghanada.MeghanadaProject;
@@ -77,6 +79,7 @@ public class Session {
   private Project currentProject;
   private JavaCompletion completion;
   private JavaVariableCompletion variableCompletion;
+  private JavaImportCompletion importCompletion;
   private LocationSearcher locationSearcher;
   private DeclarationSearcher declarationSearcher;
   private ReferenceSearcher referenceSearcher;
@@ -114,6 +117,7 @@ public class Session {
       // challenge
       final File gradle = new File(base, Project.GRADLE_PROJECT_FILE);
       final File mvn = new File(base, Project.MVN_PROJECT_FILE);
+      final File eclipse = new File(base, Project.ECLIPSE_PROJECT_FILE);
       final File meghanada = new File(base, Config.MEGHANADA_CONF_FILE);
 
       if (gradle.exists()) {
@@ -122,6 +126,9 @@ public class Session {
       } else if (mvn.exists()) {
         log.debug("find mvn project {}", mvn);
         return loadProject(base, Project.MVN_PROJECT_FILE, current);
+      } else if (eclipse.exists()) {
+        log.debug("find eclipse project {}", eclipse);
+        return loadProject(base, Project.ECLIPSE_PROJECT_FILE, current);
       } else if (meghanada.exists()) {
         log.debug("find meghanada project {}", meghanada, current);
         return loadProject(base, Config.MEGHANADA_CONF_FILE, current);
@@ -180,6 +187,9 @@ public class Session {
           break;
         case Project.MVN_PROJECT_FILE:
           project = new MavenProject(projectRoot);
+          break;
+        case Project.ECLIPSE_PROJECT_FILE:
+          project = new EclipseProject(projectRoot);
           break;
         default:
           project = new MeghanadaProject(projectRoot);
@@ -240,6 +250,7 @@ public class Session {
       // challenge
       final File gradle = new File(base, Project.GRADLE_PROJECT_FILE);
       final File mvn = new File(base, Project.MVN_PROJECT_FILE);
+      final File eclipse = new File(base, Project.ECLIPSE_PROJECT_FILE);
       final File meghanada = new File(base, Config.MEGHANADA_CONF_FILE);
 
       if (gradle.exists()) {
@@ -247,6 +258,9 @@ public class Session {
         return base;
       } else if (mvn.exists()) {
         log.debug("find mvn project {}", mvn);
+        return base;
+      } else if (eclipse.exists()) {
+        log.debug("find eclipse project {}", eclipse);
         return base;
       } else if (meghanada.exists()) {
         log.debug("find meghanada project {}", meghanada);
@@ -283,6 +297,7 @@ public class Session {
       this.getLocationSearcher().setProject(currentProject);
       this.getDeclarationSearcher().setProject(this.currentProject);
       this.getVariableCompletion().setProject(this.currentProject);
+      this.getImportCompletion().setProject(this.currentProject);
       this.getCompletion().setProject(this.currentProject);
       return true;
     }
@@ -293,6 +308,10 @@ public class Session {
           .orElse(false);
     } else if (currentProject instanceof MavenProject) {
       return loadProject(projectRoot, Project.MVN_PROJECT_FILE, base)
+          .map(project -> setProject(projectRoot, project))
+          .orElse(false);
+    } else if (currentProject instanceof EclipseProject) {
+      return loadProject(projectRoot, Project.ECLIPSE_PROJECT_FILE, base)
           .map(project -> setProject(projectRoot, project))
           .orElse(false);
     }
@@ -310,6 +329,7 @@ public class Session {
     this.getLocationSearcher().setProject(currentProject);
     this.getDeclarationSearcher().setProject(this.currentProject);
     this.getVariableCompletion().setProject(currentProject);
+    this.getImportCompletion().setProject(currentProject);
     this.getCompletion().setProject(currentProject);
     return true;
   }
@@ -319,7 +339,7 @@ public class Session {
     this.sessionEventBus.subscribeFileWatch();
     this.sessionEventBus.subscribeParse();
     this.sessionEventBus.subscribeCache();
-    this.sessionEventBus.subscribeIdle();
+    // this.sessionEventBus.subscribeIdle();
   }
 
   public void start() throws IOException {
@@ -376,6 +396,13 @@ public class Session {
       this.variableCompletion = new JavaVariableCompletion(currentProject);
     }
     return variableCompletion;
+  }
+
+  private JavaImportCompletion getImportCompletion() {
+    if (isNull(this.importCompletion)) {
+      this.importCompletion = new JavaImportCompletion(this.currentProject);
+    }
+    return this.importCompletion;
   }
 
   public synchronized Collection<? extends CandidateUnit> completionAt(
@@ -435,92 +462,92 @@ public class Session {
     return parseJavaSource(file).map(source -> source.addImportIfAbsent(fqcn)).orElse(false);
   }
 
-  public synchronized void optimizeImport(final String path) throws ExecutionException {
+  public synchronized void optimizeImport(String sourceFile, String tmpSourceFile, String code)
+      throws IOException {
     // java file only
-    final File file = normalize(path);
+    final File file = normalize(sourceFile);
     if (!FileUtils.isJavaFile(file)) {
       return;
     }
-    boolean b = this.changeProject(path);
+    boolean b = this.changeProject(sourceFile);
+    CompileResult result = currentProject.compileString(sourceFile, code);
+    Source source = result.getSources().get(file.getCanonicalFile());
+    if (nonNull(source)) {
+      List<String> optimized;
+      try {
+        optimized = source.optimizeImports();
+      } catch (IllegalStateException ex) {
+        log.warn("it can not be optimized:{}", ex.getMessage());
+        return;
+      }
+      boolean addLine = false;
+      final StringBuilder sb = new StringBuilder(1024 * 4);
 
-    parseJavaSource(file)
-        .ifPresent(
-            source -> {
-              List<String> optimized = null;
-              try {
-                optimized = source.optimizeImports();
-              } catch (IllegalStateException ex) {
-                log.warn("it can not be optimized:{}", ex.getMessage());
-                return;
-              }
-              boolean addLine = false;
-              final StringBuilder sb = new StringBuilder(1024 * 4);
+      if (!source.getPackageName().isEmpty()) {
+        try {
+          long end = source.getPackageStartLine();
+          if (end > 0) {
+            end = end - 1;
+            FileUtils.readRangeLines(
+                file,
+                0,
+                end,
+                s -> {
+                  sb.append(s).append("\n");
+                });
+          }
+          sb.append("package ").append(source.getPackageName()).append(";\n");
+        } catch (IOException e) {
+          throw new UncheckedIOException(e);
+        }
+      }
 
-              if (!source.getPackageName().isEmpty()) {
-                try {
-                  long end = source.getPackageStartLine();
-                  if (end > 0) {
-                    end = end - 1;
-                    FileUtils.readRangeLines(
-                        file,
-                        0,
-                        end,
-                        s -> {
-                          sb.append(s).append("\n");
-                        });
+      if (source.staticImportClass.size() > 0) {
+        sb.append('\n');
+        addLine = true;
+        source
+            .staticImportClass
+            .entrySet()
+            .stream()
+            .map(
+                e -> {
+                  final String method = e.getKey();
+                  final String fqcn = e.getValue();
+                  return fqcn + '.' + method;
+                })
+            .sorted(Comparator.naturalOrder())
+            .forEach(s -> sb.append("import static ").append(s).append(";\n"));
+        sb.append('\n');
+      }
+      if (optimized.size() > 0) {
+        if (!addLine) {
+          sb.append('\n');
+        }
+        for (final String fqcn : optimized) {
+          sb.append("import ").append(fqcn).append(";\n");
+        }
+        sb.append('\n');
+      }
+
+      try (final Stream<String> stream = Files.lines(file.toPath(), StandardCharsets.UTF_8)) {
+        long startLine = source.getClassStartLine();
+        stream
+            .skip(startLine)
+            .forEach(
+                s -> {
+                  if (startLine > 0 || !s.contains("package ")) {
+                    sb.append(s).append('\n');
                   }
-                  sb.append("package ").append(source.getPackageName()).append(";\n");
-                } catch (IOException e) {
-                  throw new UncheckedIOException(e);
-                }
-              }
-
-              if (source.staticImportClass.size() > 0) {
-                sb.append('\n');
-                addLine = true;
-                source
-                    .staticImportClass
-                    .entrySet()
-                    .stream()
-                    .map(
-                        e -> {
-                          final String method = e.getKey();
-                          final String fqcn = e.getValue();
-                          return fqcn + '.' + method;
-                        })
-                    .sorted(Comparator.naturalOrder())
-                    .forEach(s -> sb.append("import static ").append(s).append(";\n"));
-                sb.append('\n');
-              }
-              if (optimized.size() > 0) {
-                if (!addLine) {
-                  sb.append('\n');
-                }
-                for (final String fqcn : optimized) {
-                  sb.append("import ").append(fqcn).append(";\n");
-                }
-              }
-
-              try (final Stream<String> stream =
-                  Files.lines(file.toPath(), StandardCharsets.UTF_8)) {
-                long startLine = source.getClassStartLine();
-                stream
-                    .skip(startLine)
-                    .forEach(
-                        s -> {
-                          if (startLine > 0 || !s.contains("package ")) {
-                            sb.append(s).append('\n');
-                          }
-                        });
-                Files.write(
-                    Paths.get(path),
-                    sb.toString().getBytes(StandardCharsets.UTF_8),
-                    StandardOpenOption.WRITE,
-                    StandardOpenOption.TRUNCATE_EXISTING);
-              } catch (final IOException e) {
-                throw new UncheckedIOException(e);
-              }
-            });
+                });
+        Files.write(
+            Paths.get(tmpSourceFile),
+            sb.toString().getBytes(StandardCharsets.UTF_8),
+            StandardOpenOption.WRITE,
+            StandardOpenOption.TRUNCATE_EXISTING);
+      } catch (final IOException e) {
+        throw new UncheckedIOException(e);
+      }
+    }
   }
 
   public synchronized Map<String, List<String>> searchMissingImport(final String path)
@@ -718,6 +745,12 @@ public class Session {
               project -> {
                 boolean ret = setProject(projectRoot, project);
               });
+    } else if (currentProject instanceof EclipseProject) {
+      loadProject(projectRoot, Project.ECLIPSE_PROJECT_FILE, projectRoot)
+          .ifPresent(
+              project -> {
+                boolean ret = setProject(projectRoot, project);
+              });
     } else {
       loadProject(projectRoot, Config.MEGHANADA_CONF_FILE, projectRoot)
           .ifPresent(
@@ -837,7 +870,21 @@ public class Session {
       return false;
     }
     getCompletion().resolve(file, type, desc);
-    log.info("path {} {} {} {}", path, type, item, desc);
+    log.trace("path {} {} {} {}", path, type, item, desc);
     return true;
+  }
+
+  public synchronized Map<String, List<String>> searchImports(
+      String path, int line, int column, String symbol) throws IOException, ExecutionException {
+    // java file only
+    final File file = normalize(path);
+    if (!FileUtils.isJavaFile(file)) {
+      return Collections.emptyMap();
+    }
+
+    boolean b = this.changeProject(path);
+    return getImportCompletion()
+        .importAtPoint(file, line, column, symbol)
+        .orElse(Collections.emptyMap());
   }
 }

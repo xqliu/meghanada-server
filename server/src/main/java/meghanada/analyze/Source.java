@@ -78,6 +78,7 @@ public class Source implements Serializable, Storable, SearchIndexable {
   public final Deque<ClassScope> currentClassScope = new ArrayDeque<>(1);
   public final Set<String> usingClasses = new HashSet<>(8);
   public final String filePath;
+  final transient Map<Long, List<IndexableWord>> indexWords = new HashMap<>(4);
   // temp flag
   public boolean hasCompileError;
   private String packageName = "";
@@ -86,8 +87,6 @@ public class Source implements Serializable, Storable, SearchIndexable {
   private Map<String, String> importMap;
   private transient List<LineRange> lineRange;
   private transient LineMap lineMap;
-
-  transient Map<Long, List<IndexableWord>> indexWords = new HashMap<>(4);
 
   public Source(String filePath) {
     this.filePath = filePath;
@@ -482,7 +481,7 @@ public class Source implements Serializable, Storable, SearchIndexable {
 
       log.debug("search unknown class : '{}' ...", searchWord);
       final Collection<? extends CandidateUnit> findUnits =
-          reflector.searchClasses(searchWord, false, false);
+          reflector.searchClasses(searchWord, true);
       log.debug("find candidate units : {}", findUnits);
 
       if (findUnits.size() == 0) {
@@ -819,9 +818,7 @@ public class Source implements Serializable, Storable, SearchIndexable {
 
   @Override
   public List<Document> getDocumentIndices() {
-    final List<Document> list = new ArrayList<>();
-    list.addAll(createSourceTextIndices());
-    return list;
+    return new ArrayList<>(createSourceTextIndices());
   }
 
   private Collection<? extends Document> createSourceTextIndices() {
@@ -849,9 +846,13 @@ public class Source implements Serializable, Storable, SearchIndexable {
             final String val = word.word;
             final String name = field.getName();
             if (field.isCategorize()) {
-              doc.add(new Field(SearchIndexable.CATEGORY, name, YES, NOT_ANALYZED));
+              if (nonNull(name)) {
+                doc.add(new Field(SearchIndexable.CATEGORY, name, YES, NOT_ANALYZED));
+              }
             }
-            doc.add(new Field(name, val, NO, ANALYZED));
+            if (nonNull(val) && nonNull(name)) {
+              doc.add(new Field(name, val, NO, ANALYZED));
+            }
           }
         }
 
@@ -887,5 +888,16 @@ public class Source implements Serializable, Storable, SearchIndexable {
       words.add(indexableWord);
       this.indexWords.put(line, words);
     }
+  }
+
+  public Map<String, ClassScope> getAllClasses() {
+    Map<String, ClassScope> classMap = new HashMap<>();
+    this.getAllClassScopes()
+        .forEach(
+            cs -> {
+              String fqcn = cs.getFQCN();
+              classMap.put(fqcn, cs);
+            });
+    return classMap;
   }
 }

@@ -54,6 +54,7 @@ import meghanada.project.ProjectDependency;
 import meghanada.reflect.asm.CachedASMReflector;
 import meghanada.utils.ClassNameUtils;
 import meghanada.utils.FileUtils;
+import meghanada.utils.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.EntryMessage;
@@ -87,7 +88,13 @@ public class LocationSearcher {
 
   private static Location searchLocationFromFile(
       final SearchContext ctx, final String fqcn, final File targetFile) throws IOException {
-    final CompilationUnit compilationUnit = JavaParser.parse(targetFile, StandardCharsets.UTF_8);
+    CompilationUnit compilationUnit;
+    try {
+      compilationUnit = JavaParser.parse(targetFile, StandardCharsets.UTF_8);
+    } catch (Throwable e) {
+      log.warn(e.getMessage(), e);
+      return new Location(targetFile.getCanonicalPath(), 0, 0);
+    }
     final List<TypeDeclaration<?>> types = compilationUnit.getTypes();
     for (final TypeDeclaration<?> type : types) {
       if (ctx.kind.equals(SearchKind.CLASS)) {
@@ -179,6 +186,20 @@ public class LocationSearcher {
     return null;
   }
 
+  private static String replaceIgnoreStmt(String s) {
+    Map<String, String> rename = new HashMap<>(8);
+    rename.put(", (0)null", "");
+    rename.put(", (1)null", "");
+    rename.put(", (2)null", "");
+    rename.put(", (3)null", "");
+    String replaced = ClassNameUtils.replaceFromMap(s, rename);
+    rename.put("(0)null", "");
+    rename.put("(1)null", "");
+    rename.put("(2)null", "");
+    rename.put("(3)null", "");
+    return ClassNameUtils.replaceFromMap(replaced, rename);
+  }
+
   private static void copyAndFilter(final File decompiled, final File temp) throws IOException {
     try (final BufferedWriter bw =
             Files.newBufferedWriter(
@@ -188,7 +209,14 @@ public class LocationSearcher {
                 StandardOpenOption.TRUNCATE_EXISTING);
         final Stream<String> stream = Files.lines(decompiled.toPath(), StandardCharsets.UTF_8)) {
       final Map<String, String> rename = new HashMap<>(8);
-
+      rename.put("(0)null", "");
+      rename.put("(1)null", "");
+      rename.put("(2)null", "");
+      rename.put("(3)null", "");
+      rename.put(", (0)null", "");
+      rename.put(", (1)null", "");
+      rename.put(", (2)null", "");
+      rename.put(", (3)null", "");
       stream.forEach(
           wrapIOConsumer(
               s -> {
@@ -199,16 +227,16 @@ public class LocationSearcher {
                   rename.put(' ' + inner + '(', ' ' + innerClass + '(');
                   rename.put(' ' + inner + '.', ' ' + innerClass + '.');
                   rename.put('(' + inner + '.', '(' + innerClass + '.');
-                  final String replace = ClassNameUtils.replace(s, inner, innerClass);
-                  bw.write(replace);
+                  final String replace = StringUtils.replace(s, inner, innerClass);
+                  bw.write(replaceIgnoreStmt(replace));
                   bw.newLine();
                 } else {
                   final boolean match = rename.keySet().stream().anyMatch(s::contains);
                   if (match) {
                     final String replace = ClassNameUtils.replaceFromMap(s, rename);
-                    bw.write(replace);
+                    bw.write(replaceIgnoreStmt(replace));
                   } else {
-                    bw.write(s);
+                    bw.write(replaceIgnoreStmt(s));
                   }
                   bw.newLine();
                 }
@@ -478,7 +506,7 @@ public class LocationSearcher {
   private Location searchFromSrcZip(final SearchContext context) throws IOException {
 
     final String javaHomeDir = Config.load().getJavaHomeDir();
-    File srcZip = null;
+    File srcZip;
 
     Config config = Config.load();
     if (config.isJava8()) {
@@ -549,7 +577,7 @@ public class LocationSearcher {
       final File depParent = classFile.getParentFile();
       final File dependencyDir = depParent.getParentFile();
       final String srcJarName =
-          ClassNameUtils.replace(classFile.getName(), FileUtils.JAR_EXT, "-sources.jar");
+          StringUtils.replace(classFile.getName(), FileUtils.JAR_EXT, "-sources.jar");
 
       final String disable = System.getProperty("disable-source-jar");
       if (disable != null && disable.equals("true")) {
@@ -600,7 +628,7 @@ public class LocationSearcher {
               output.toPath(),
               zipEntry -> {
                 final String name = zipEntry.getName();
-                final String base = ClassNameUtils.replace(searchFQCN, ".", "/");
+                final String base = StringUtils.replace(searchFQCN, ".", "/");
                 final String search = base + FileUtils.CLASS_EXT;
                 if (name.equals(search)) {
                   return Filter.Result.ACCEPT;
@@ -665,7 +693,7 @@ public class LocationSearcher {
       this.copiedSrcFile.remove(searchFQCN);
     }
     try (final ZipFile srcZipFile = new ZipFile(srcZip)) {
-      final String s = ClassNameUtils.replace(searchFQCN, ".", "/") + FileUtils.JAVA_EXT;
+      final String s = StringUtils.replace(searchFQCN, ".", "/") + FileUtils.JAVA_EXT;
       ZipEntry entry = srcZipFile.getEntry(s);
       if (entry == null) {
         Optional<? extends ZipEntry> zipEntry =

@@ -14,10 +14,11 @@ Some planned and implemented features:
 * `Gradle` and `Maven` project support
 * Run build tool task
 * Compile your project
+* Support annotaion processor
 * Analyze java source (hooks into build)
 * Code completion
 * Optimize import
-* Jump declaration
+* Jump declaration (without source)
 * Run junit test (include test runner)
 * Search references
 * Full-featured text search (default off)
@@ -77,6 +78,16 @@ java -XX:+UseConcMarkSweepGC -XX:SoftRefLRUPolicyMSPerMB=50 -Xverify:none -Xms25
 ```
 
 Meghanada-Server is required JDK 8 or later (not JRE). It used Compiler API.
+
+## Contributing
+
+Contributions are extremely welcome!
+
+Please check execute the following command before contributing. then please push PR to `dev` branch.
+
+```
+./gradlew clean goJF check
+```
 
 ## Project
 

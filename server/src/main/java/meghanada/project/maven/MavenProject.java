@@ -14,13 +14,11 @@ import meghanada.config.Config;
 import meghanada.project.Project;
 import meghanada.project.ProjectDependency;
 import meghanada.project.ProjectParseException;
-import meghanada.utils.ClassNameUtils;
+import meghanada.utils.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 public class MavenProject extends Project {
-
-  private static final long serialVersionUID = 1L;
 
   private static final String REPOSITORY = "repository";
   private static final String RESOLVE_TASK = "dependency:resolve";
@@ -28,6 +26,7 @@ public class MavenProject extends Project {
   private static final String BUILD_CLASSPATH_TASK = "dependency:build-classpath";
 
   private static final Logger log = LogManager.getLogger(MavenProject.class);
+  private static final long serialVersionUID = 5078373387618330618L;
 
   private File pomFile;
   private String mavenCmd = "mvn";
@@ -50,7 +49,7 @@ public class MavenProject extends Project {
     if (i > 0) {
       parent = parent.substring(i + 11);
     }
-    final String groupID = ClassNameUtils.replace(parent, File.separator, ".");
+    final String groupID = StringUtils.replace(parent, File.separator, ".");
     return groupID + ':' + artifactID;
   }
 

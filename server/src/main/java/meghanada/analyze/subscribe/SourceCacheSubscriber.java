@@ -13,6 +13,7 @@ import meghanada.analyze.Source;
 import meghanada.cache.GlobalCache;
 import meghanada.config.Config;
 import meghanada.project.Project;
+import meghanada.reflect.MemberDescriptor;
 import meghanada.store.ProjectDatabaseHelper;
 import meghanada.utils.FileUtils;
 import org.apache.logging.log4j.LogManager;
@@ -26,11 +27,13 @@ public class SourceCacheSubscriber {
   private final Map<String, String> checksumMap;
   private final Project project;
   private long lastCached;
+  private boolean importMemberCache = false;
 
   public SourceCacheSubscriber(final Project project) {
     this.project = project;
     this.callerMap = project.getCallerMap();
     this.checksumMap = ProjectDatabaseHelper.getChecksumMap(project.getProjectRootPath());
+    this.lastCached = System.currentTimeMillis();
   }
 
   private void analyzed(final Source source, final boolean isDiagnostics) throws IOException {
@@ -44,8 +47,10 @@ public class SourceCacheSubscriber {
     if (isDiagnostics) {
       final long now = System.currentTimeMillis();
       if (now - this.lastCached > 10000) {
-        this.createImportMemberCache(source);
-        this.lastCached = now;
+        if (this.importMemberCache) {
+          this.createImportMemberCache(source);
+          this.lastCached = now;
+        }
       }
     }
 
@@ -69,7 +74,9 @@ public class SourceCacheSubscriber {
 
     final File sourceFile = source.getFile();
     final String path = sourceFile.getCanonicalPath();
-    source.invalidateCache();
+    if (!isDiagnostics) {
+      source.invalidateCache();
+    }
 
     if (!source.hasCompileError) {
       final String md5sum = FileUtils.getChecksum(sourceFile);
@@ -81,14 +88,13 @@ public class SourceCacheSubscriber {
       checksumMap.remove(path);
       if (!isDiagnostics) {
         globalCache.replaceSource(this.project, source);
-      } else {
-        globalCache.invalidateSource(this.project, sourceFile);
       }
     }
   }
 
   public void complete() throws IOException {
-    ProjectDatabaseHelper.saveChecksumMap(this.project.getProjectRootPath(), this.checksumMap);
+    boolean b =
+        ProjectDatabaseHelper.saveChecksumMap(this.project.getProjectRootPath(), this.checksumMap);
     this.project.writeCaller();
   }
 
@@ -100,7 +106,8 @@ public class SourceCacheSubscriber {
         src.importClasses.forEach(
             impFqcn -> {
               try {
-                globalCache.getMemberDescriptors(impFqcn);
+                List<MemberDescriptor> descriptors = globalCache.getMemberDescriptors(impFqcn);
+                log.trace("cached:{} size:{}", impFqcn, descriptors.size());
               } catch (Exception e) {
                 log.catching(e);
               }
@@ -116,7 +123,6 @@ public class SourceCacheSubscriber {
     final Map<File, Source> analyzedMap = event.analyzedMap;
     analyzedMap
         .values()
-        .parallelStream()
         .forEach(
             source -> {
               try {

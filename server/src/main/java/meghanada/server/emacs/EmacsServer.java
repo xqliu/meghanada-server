@@ -205,8 +205,8 @@ public class EmacsServer implements Server {
             .get(
                 args -> {
                   // oi : Optimize Import
-                  // usage: oi <filepath>
-                  handler.optimizeImport(id, args.get(0));
+                  // usage: oi <filepath> <contents-file>
+                  handler.optimizeImport(id, args.get(0), args.get(1));
                   return true;
                 })
             .when(headTail(eq("ia"), any()))
@@ -215,6 +215,14 @@ public class EmacsServer implements Server {
                   // ia : Import All
                   // usage: ia <filepath>
                   handler.importAll(id, args.get(0));
+                  return true;
+                })
+            .when(headTail(eq("ip"), any()))
+            .get(
+                args -> {
+                  // ip : Import at point
+                  // usage: ip <filepath> <line> <column> <symbol>
+                  handler.importAtPoint(id, args.get(0), args.get(1), args.get(2), args.get(3));
                   return true;
                 })
             .when(headTail(eq("st"), any()))

@@ -12,11 +12,11 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -31,14 +31,13 @@ import jetbrains.exodus.entitystore.EntityId;
 import meghanada.cache.GlobalCache;
 import meghanada.index.IndexDatabase;
 import meghanada.index.SearchIndexable;
-import meghanada.module.ModuleHelper;
 import meghanada.reflect.CandidateUnit;
 import meghanada.reflect.ClassIndex;
 import meghanada.reflect.MemberDescriptor;
 import meghanada.store.ProjectDatabaseHelper;
 import meghanada.utils.ClassName;
 import meghanada.utils.ClassNameUtils;
-import org.apache.commons.lang3.StringUtils;
+import meghanada.utils.FileUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.lucene.document.Document;
@@ -71,20 +70,26 @@ public class CachedASMReflector {
     return cachedASMReflector;
   }
 
-  private static boolean containsKeyword(String keyword, boolean partial, ClassIndex index) {
-
-    String name = index.getName();
+  public static boolean containsKeyword(
+      final String keyword,
+      final boolean partial,
+      final CandidateUnit c,
+      final boolean caseSensitive) {
+    String name = c.getName();
     if (ClassNameUtils.isAnonymousClass(name)) {
       return false;
     }
     if (partial) {
+      if (caseSensitive) {
+        return name.contains(keyword);
+      }
       String lowerKeyword = keyword.toLowerCase();
       String className = name.toLowerCase();
       return className.contains(lowerKeyword);
     } else {
       return name.equals(keyword)
           || name.endsWith('$' + keyword)
-          || index.getDeclaration().equals(keyword);
+          || c.getDeclaration().equals(keyword);
     }
   }
 
@@ -118,14 +123,30 @@ public class CachedASMReflector {
     return members;
   }
 
+  public static ClassIndex cloneClassIndex(ClassIndex c) {
+    ClassIndex ci = c.clone();
+    if (ci.isInnerClass()) {
+      String p = ci.getPackage();
+      if (!p.isEmpty()) {
+        String declaration = ci.getDisplayDeclaration();
+        String clazzName = declaration.substring(p.length() + 1);
+        ci.setName(clazzName);
+      }
+    }
+    return ci;
+  }
+
   public void addClasspath(Collection<File> depends) {
     depends.forEach(this::addClasspath);
   }
 
   public void addClasspath(File dep) {
-    if (dep.isDirectory()) {
+    if (!dep.exists() || dep.isDirectory()) {
       this.directories.add(dep);
     } else {
+      if (!dep.canRead()) {
+        return;
+      }
       this.jars.add(dep);
     }
   }
@@ -135,8 +156,6 @@ public class CachedASMReflector {
   }
 
   public void createClassIndexes() {
-    log.debug("start createClassIndexes");
-
     this.jars
         .parallelStream()
         .forEach(
@@ -214,15 +233,7 @@ public class CachedASMReflector {
         newIndex.setEntityID(entityId);
       }
     }
-    try {
-      if (ModuleHelper.isJrtFsFile(file)) {
-        newIndex.setFilePath(file.getPath());
-      } else {
-        newIndex.setFilePath(file.getCanonicalPath());
-      }
-    } catch (IOException e) {
-      throw new UncheckedIOException(e);
-    }
+    ASMReflector.setFilePath(newIndex, file);
 
     this.globalClassIndex.put(fqcn, newIndex);
   }
@@ -300,54 +311,12 @@ public class CachedASMReflector {
     return result;
   }
 
-  public List<ClassIndex> fuzzySearchClasses(String keyword) {
-    return this.fuzzySearchClasses(keyword, false);
-  }
-
-  public List<ClassIndex> fuzzySearchAnnotations(String keyword) {
-    return this.fuzzySearchClasses(keyword, true);
-  }
-
-  private List<ClassIndex> fuzzySearchClasses(String keyword, boolean anno) {
-    int length = keyword.length() + 1;
-
-    List<ClassIndex> result = new ArrayList<>(64);
-    for (ClassIndex c : this.globalClassIndex.values()) {
-      if (anno && !c.isAnnotation()) {
-        continue;
-      }
-      String name = c.getName();
-      int score = StringUtils.getFuzzyDistance(name, keyword, Locale.ENGLISH);
-      if (score >= length) {
-        result.add(cloneClassIndex(c));
-      }
-    }
-    return result;
-  }
-
-  public Stream<ClassIndex> fuzzySearchClassesStream(String keyword, boolean anno) {
-    int length = keyword.length() + 1;
-    return this.globalClassIndex
-        .values()
-        .parallelStream()
-        .filter(
-            classIndex -> {
-              if (anno && !classIndex.isAnnotation()) {
-                return false;
-              }
-              String name = classIndex.getName();
-              int score = StringUtils.getFuzzyDistance(name, keyword, Locale.ENGLISH);
-              return score >= length;
-            })
-        .map(this::cloneClassIndex);
-  }
-
   public List<ClassIndex> searchInnerClasses(String parent) {
     return this.globalClassIndex
         .values()
         .parallelStream()
         .filter(classIndex -> classIndex.getReturnType().startsWith(parent + '$'))
-        .map(this::cloneClassIndex)
+        .map(CachedASMReflector::cloneClassIndex)
         .collect(Collectors.toList());
   }
 
@@ -364,73 +333,23 @@ public class CachedASMReflector {
     return result;
   }
 
-  public List<ClassIndex> searchClasses(String keyword) {
-    return this.searchClasses(keyword, true, false);
-  }
-
-  public List<ClassIndex> searchAnnotations(String keyword) {
-    return this.searchClasses(keyword, true, true);
-  }
-
-  private ClassIndex cloneClassIndex(ClassIndex c) {
-    ClassIndex ci = c.clone();
-    if (ci.isInnerClass()) {
-      String p = ci.getPackage();
-      if (!p.isEmpty()) {
-        String declaration = ci.getDisplayDeclaration();
-        String clazzName = declaration.substring(p.length() + 1);
-        ci.setName(clazzName);
-      }
-    }
-    return ci;
-  }
-
-  public List<ClassIndex> searchClasses(String keyword, boolean partial, boolean anno) {
-    List<ClassIndex> result = new ArrayList<>(64);
-    for (ClassIndex c : this.globalClassIndex.values()) {
-      if (keyword.isEmpty()) {
-        result.add(cloneClassIndex(c));
-      } else {
-        if (!(anno && !c.isAnnotation())
-            && CachedASMReflector.containsKeyword(keyword, partial, c)) {
-          result.add(cloneClassIndex(c));
-        }
-      }
-    }
-    return result;
-  }
-
-  public Stream<ClassIndex> searchClassesStream(String keyword, boolean partial, boolean anno) {
+  public List<ClassIndex> searchClasses(final String keyword, final boolean includeAnnotation) {
     return this.globalClassIndex
         .values()
         .parallelStream()
         .filter(
-            classIndex -> {
-              if (keyword.isEmpty()) {
-                // match all
-                return true;
+            c -> {
+              if (!includeAnnotation && c.isAnnotation()) {
+                return false;
               }
-              return !(anno && !classIndex.isAnnotation())
-                  && CachedASMReflector.containsKeyword(keyword, partial, classIndex);
+              return containsKeyword(keyword, false, c, false);
             })
-        .map(this::cloneClassIndex);
+        .map(CachedASMReflector::cloneClassIndex)
+        .collect(Collectors.toList());
   }
 
   public Stream<ClassIndex> allClassStream() {
     return this.globalClassIndex.values().parallelStream();
-  }
-
-  public Stream<MemberDescriptor> allMethodStream() {
-    return this.globalClassIndex
-        .values()
-        .parallelStream()
-        .flatMap(
-            cl -> {
-              String declaration = cl.getDeclaration();
-              return reflect(declaration)
-                  .parallelStream()
-                  .filter(m -> m.matchType(CandidateUnit.MemberType.METHOD));
-            });
   }
 
   public List<MemberDescriptor> reflect(String className) {
@@ -556,9 +475,22 @@ public class CachedASMReflector {
     return this.standardClasses;
   }
 
-  public void scanAllMethods() {
-    ASMReflector reflector = ASMReflector.getInstance();
+  public void scanAllStaticMembers() {
     IndexDatabase database = IndexDatabase.getInstance();
+    try (Stream<File> stream = this.directories.stream().parallel()) {
+      stream.forEach(
+          file -> {
+            ConcurrentLinkedDeque<MemberDescriptor> deque = new ConcurrentLinkedDeque<>();
+            try {
+              scanMembers(file, deque);
+              MemberIndex mi = new MemberIndex(file.getCanonicalPath(), deque);
+              database.requestIndex(mi, event -> {});
+            } catch (IOException e) {
+              throw new UncheckedIOException(e);
+            }
+          });
+    }
+
     this.jars
         .parallelStream()
         .forEach(
@@ -570,23 +502,7 @@ public class CachedASMReflector {
                   return;
                 }
                 ConcurrentLinkedDeque<MemberDescriptor> deque = new ConcurrentLinkedDeque<>();
-                reflector.scanClasses(
-                    file,
-                    (name, in) -> {
-                      ClassReader read = new ClassReader(in);
-                      ClassAnalyzeVisitor visitor =
-                          new ClassAnalyzeVisitor(name, name, false, false);
-                      read.accept(visitor, 0);
-                      List<MemberDescriptor> members =
-                          visitor
-                              .getMembers()
-                              .stream()
-                              .filter(m -> m.isPublic() && m.isStatic())
-                              .collect(Collectors.toList());
-                      if (!members.isEmpty()) {
-                        deque.addAll(members);
-                      }
-                    });
+                scanMembers(file, deque);
                 final MemberIndex mi = new MemberIndex(file.getCanonicalPath(), deque);
                 database.requestIndex(
                     mi,
@@ -604,14 +520,40 @@ public class CachedASMReflector {
             });
   }
 
-  public void scan(File file, Consumer<String> c) {
+  private void scanMembers(final File root, final ConcurrentLinkedDeque<MemberDescriptor> deque)
+      throws IOException {
+    final ASMReflector reflector = ASMReflector.getInstance();
+    reflector.scanClasses(
+        root,
+        (file, name, in) -> {
+          ClassReader read = new ClassReader(in);
+          String className = name;
+          if (root.isDirectory()) {
+            // path to package
+            Set<File> roots = Collections.singleton(root);
+            Optional<String> s = FileUtils.convertPathToClass(roots, file);
+            if (s.isPresent()) {
+              className = s.get();
+            }
+          }
+          ClassAnalyzeVisitor visitor = new ClassAnalyzeVisitor(className, name, false, false);
+          read.accept(visitor, 0);
+          List<MemberDescriptor> members =
+              visitor
+                  .getMembers()
+                  .stream()
+                  .filter(m -> m.isPublic() && m.isStatic())
+                  .collect(Collectors.toList());
+          if (!members.isEmpty()) {
+            deque.addAll(members);
+          }
+        });
+  }
+
+  public void scan(File root, Consumer<String> c) {
     ASMReflector reflector = ASMReflector.getInstance();
     try {
-      reflector.scanClasses(
-          file,
-          (name, in) -> {
-            c.accept(name);
-          });
+      reflector.scanClasses(root, (f, name, in) -> c.accept(name));
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }

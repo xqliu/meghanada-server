@@ -1,3 +1,20 @@
+# Version 1.0.4 (2018-06-05)
+
+* Support eclipse project (experimental).
+* Fix broken custom source formatter.
+* Fix broken optimize import.
+* Fix decompiled source parse error.
+* Decrease cpu usage  a little.
+* Fix some bugs and improve stability.
+
+# Version 1.0.3 (2018-05-24)
+
+* Support import completion from symbol (added import-at-point function).
+* Completion matcher is selectable (default is prefix matcher).
+* Fix broken static import completion.
+* Fix import statement sort (in case google-java-format).
+* Fix some bugs and improve stability.
+
 # Version 1.0.2 (2018-05-08)
 
 * Show progress when meghanada downloading server module

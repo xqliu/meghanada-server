@@ -2,8 +2,13 @@ package meghanada.config;
 
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
+import static meghanada.config.Config.CompletionType.CAMEL_CASE;
+import static meghanada.config.Config.CompletionType.CONTAINS;
+import static meghanada.config.Config.CompletionType.FUZZY;
+import static meghanada.config.Config.CompletionType.PREFIX;
 
 import com.google.common.base.Stopwatch;
+import com.google.common.base.Strings;
 import com.typesafe.config.ConfigFactory;
 import com.typesafe.config.ConfigValueFactory;
 import java.io.File;
@@ -32,6 +37,11 @@ public class Config {
   public static final String DEFAULT_JAVAC_ARG = "-Xlint:all";
   public static final String PROJECT_ROOT_KEY = "project.root";
 
+  private static final String COMPLETION_TYPE_PREFIX = "prefix";
+  private static final String COMPLETION_TYPE_CONTAINS = "contains";
+  private static final String COMPLETION_TYPE_FUZZY = "fuzzy";
+  private static final String COMPLETION_TYPE_CAME_CASE = "camel-case";
+
   private static final Logger log = LogManager.getLogger(Config.class);
   private static Config config;
 
@@ -41,6 +51,7 @@ public class Config {
   private List<String> excludeList;
   private List<String> java8JavacArgs = new ArrayList<>(8);
   private List<String> java9JavacArgs = new ArrayList<>(8);
+  private List<String> java10JavacArgs = new ArrayList<>(8);
   private boolean buildWithDependency = true;
 
   private Config() {
@@ -53,23 +64,13 @@ public class Config {
       this.debug = true;
     }
     // force change
-    final LoggerContext context = (LoggerContext) LogManager.getContext(false);
-    final Configuration configuration = context.getConfiguration();
-    final LoggerConfig loggerConfig = configuration.getLoggerConfig(LogManager.ROOT_LOGGER_NAME);
-    loggerConfig.setLevel(level);
-    context.updateLoggers();
-
-    log.debug("home:{}", getHomeDir());
-    log.debug("java-home:{}", getJavaHomeDir());
-    log.debug("java-version:{}", getJavaVersion());
-    log.debug("user-home:{}", getUserHomeDir());
-    log.debug("project-root-dir:{}", getProjectRootDir());
-    log.debug("fast-boot:{}", useFastBoot());
-    log.debug("class-fuzzy-search:{}", useClassFuzzySearch());
-    log.debug("javac-arg:{}", getJavacArg());
-    log.debug("cache-in-project:{}", isCacheInProject());
-    if (!isCacheInProject()) {
-      log.debug("cache-root:{}", getCacheRoot());
+    Object ctx = LogManager.getContext(false);
+    if (ctx instanceof LoggerContext) {
+      LoggerContext context = (LoggerContext) ctx;
+      Configuration configuration = context.getConfiguration();
+      LoggerConfig loggerConfig = configuration.getLoggerConfig(LogManager.ROOT_LOGGER_NAME);
+      loggerConfig.setLevel(level);
+      context.updateLoggers();
     }
   }
 
@@ -99,6 +100,17 @@ public class Config {
       throw new RuntimeException(e);
     } finally {
       log.info("elapsed:{}", stopwatch.stop());
+    }
+  }
+
+  public static void timeIt(final String prefix, final SimpleConsumer consumer) {
+    final Stopwatch stopwatch = Stopwatch.createStarted();
+    try {
+      consumer.accept();
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    } finally {
+      log.info("{} elapsed:{}", prefix, stopwatch.stop());
     }
   }
 
@@ -238,15 +250,16 @@ public class Config {
   }
 
   private void setLogLevel(final String logLevel) {
-    final Level level = Level.toLevel(logLevel);
-    // force change
-    final LoggerContext context = (LoggerContext) LogManager.getContext(false);
-    final Configuration configuration = context.getConfiguration();
-    final LoggerConfig loggerConfig = configuration.getLoggerConfig(LogManager.ROOT_LOGGER_NAME);
-    loggerConfig.setLevel(level);
-    context.updateLoggers();
-
-    this.debug = !logLevel.toLowerCase().equals("info");
+    Object ctx = LogManager.getContext(false);
+    if (ctx instanceof LoggerContext) {
+      LoggerContext context = (LoggerContext) ctx;
+      Level level = Level.toLevel(logLevel);
+      Configuration configuration = context.getConfiguration();
+      LoggerConfig loggerConfig = configuration.getLoggerConfig(LogManager.ROOT_LOGGER_NAME);
+      loggerConfig.setLevel(level);
+      context.updateLoggers();
+      this.debug = !logLevel.toLowerCase().equals("info");
+    }
   }
 
   public String getHomeDir() {
@@ -265,7 +278,6 @@ public class Config {
 
     String useTemp = c.getString("temp-project-setting-dir");
     if (nonNull(useTemp) && !useTemp.isEmpty()) {
-      log.debug("use temp project setting dir {}", useTemp);
       return useTemp;
     }
 
@@ -327,10 +339,6 @@ public class Config {
     return c.getBoolean("fast-boot");
   }
 
-  public boolean useClassFuzzySearch() {
-    return c.getBoolean("class-fuzzy-search");
-  }
-
   public boolean useSourceCache() {
     return c.getBoolean("source-cache");
   }
@@ -388,24 +396,36 @@ public class Config {
     return getJavaVersion().equals("9");
   }
 
-  public boolean useAOSPStyle() {
-    return c.getBoolean("aosp-style");
+  public boolean isJava10() {
+    return getJavaVersion().equals("10");
   }
 
-  public void setJava8JavacArgs(List<String> lst) {
-    this.java8JavacArgs = lst;
+  public boolean useAOSPStyle() {
+    return c.getBoolean("aosp-style");
   }
 
   public List<String> getJava8JavacArgs() {
     return this.java8JavacArgs;
   }
 
-  public void setJava9JavacArgs(List<String> lst) {
-    this.java9JavacArgs = lst;
+  public void setJava8JavacArgs(List<String> lst) {
+    this.java8JavacArgs = lst;
   }
 
   public List<String> getJava9JavacArgs() {
     return this.java9JavacArgs;
+  }
+
+  public void setJava9JavacArgs(List<String> lst) {
+    this.java9JavacArgs = lst;
+  }
+
+  public List<String> getJava10JavacArgs() {
+    return this.java10JavacArgs;
+  }
+
+  public void setJava10JavacArgs(List<String> lst) {
+    this.java10JavacArgs = lst;
   }
 
   public String getCacheRoot() {
@@ -429,15 +449,67 @@ public class Config {
     return Arrays.stream(split).map(String::trim).collect(Collectors.toList());
   }
 
+  public CompletionType completionMatcher() {
+    String m = c.getString("completion-matcher");
+    if (Strings.isNullOrEmpty(m)) {
+      return PREFIX;
+    }
+    return getCompletionType(m);
+  }
+
+  public CompletionType classCompletionMatcher() {
+    String m = c.getString("class-completion-matcher");
+    if (Strings.isNullOrEmpty(m)) {
+      return PREFIX;
+    }
+    return getCompletionType(m);
+  }
+
+  private Config.CompletionType getCompletionType(String m) {
+    switch (m) {
+      case COMPLETION_TYPE_PREFIX:
+        return PREFIX;
+      case COMPLETION_TYPE_CONTAINS:
+        return CONTAINS;
+      case COMPLETION_TYPE_FUZZY:
+        return FUZZY;
+      case COMPLETION_TYPE_CAME_CASE:
+        return CAMEL_CASE;
+      default:
+        log.warn("invalid matcher: '{}'. use default 'prefix' matcher", m);
+        return PREFIX;
+    }
+  }
+
+  public enum CompletionType {
+    PREFIX(COMPLETION_TYPE_PREFIX),
+    CONTAINS(COMPLETION_TYPE_CONTAINS),
+    FUZZY(COMPLETION_TYPE_FUZZY),
+    CAMEL_CASE(COMPLETION_TYPE_CAME_CASE);
+
+    private final String typeName;
+
+    CompletionType(final String typeName) {
+      this.typeName = typeName;
+    }
+
+    @Override
+    public String toString() {
+      return this.typeName;
+    }
+
+    public String type() {
+      return this.typeName;
+    }
+  }
+
   @FunctionalInterface
   public interface SimpleSupplier<R> {
-
     R get() throws Exception;
   }
 
   @FunctionalInterface
   public interface SimpleConsumer {
-
     void accept() throws IOException;
   }
 }
